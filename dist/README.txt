@@ -36,6 +36,10 @@ Controls (Wii Remote + Nunchuk / Wii Zapper)
   umbrellachronicles.ini) swaps the left and right mouse buttons. "Capture mouse"
   (capture_mouse = 1) keeps the cursor inside the window while you play.
 
+Frame rate
+  The original runs gameplay at 30 fps. "Frame rate" in the F1 menu (fps60 = 1 in
+  umbrellachronicles.ini) runs it at 60 fps.
+
 Wii Remote motions (hold Ctrl and move the mouse: left/right twists, up/down tilts, fast moves
 are swings; Q/E and R/F on the keyboard)
 

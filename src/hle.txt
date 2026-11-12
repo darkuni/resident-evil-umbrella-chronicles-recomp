@@ -55,3 +55,4 @@ OSCreateThread = wrap
 WPADSetSamplingCallback = 0
 WPADIsDpdEnabled = 1
 WPADControlLed = 0
+uc_FrameLimiter = wrap   # 60 fps option (runtime/game_uc.cpp)

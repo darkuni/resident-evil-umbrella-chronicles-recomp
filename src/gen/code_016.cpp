@@ -17430,8 +17430,9 @@ void f_801581D0(Ctx* __restrict c) {
   f_8026D8F0(c); return; // 801581DC
 }
 
-// fn_801581E0
-void f_801581E0(Ctx* __restrict c) {
+void f_801581E0_orig(Ctx* __restrict c);
+// uc_FrameLimiter
+void f_801581E0_orig(Ctx* __restrict c) {
   trace_call(0x801581E0u);
   {uint32_t ea=c->r[1]+0xFFFFFFE0u; W32(ea,c->r[1]); c->r[1]=ea;} // 801581E0
   c->r[0]=c->lr; // 801581E4
@@ -17472,6 +17473,8 @@ L_80158224:;
   c->r[1]=c->r[1]+0x00000020u; // 80158268
   return; // 8015826C
 }
+void hle_wrap_uc_FrameLimiter(Ctx*, GuestFn);
+void f_801581E0(Ctx* __restrict c) { hle_wrap_uc_FrameLimiter(c, f_801581E0_orig); }
 
 // fn_80158270
 void f_80158270(Ctx* __restrict c) {

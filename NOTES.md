@@ -40,6 +40,15 @@ in Shadow (copied from the House of the Dead: Overkill repo).
   the Nunchuk (KPAD ex_status acc). wiimote.cpp now switches a real Nunchuk on (unencrypted) and reads report 0x37
   (basic IR + extension): stick, C/Z, accelerometer.
 
+## Frame rate
+- The game's frame limiter (fn_801581E0, named uc_FrameLimiter) waits for VI retraces until a counter at
+  0x804D3338 (bumped by its post-retrace callback fn_801582FC) reaches the minimum at 0x804D3340, then turns the
+  retraces that passed (up to 5) into the frame time game logic advances by (n / 59.94 s). Boot (fn_8003F830)
+  sets the minimum and its default (0x804D3344) to 2: gameplay runs at 30 fps. Front-end screens set 1 (60 fps)
+  and restore it (fn_800A8228 / fn_800A7864, fn_801FC03C / fn_801FC134, fn_801F51DC / fn_801F52E4).
+- "Frame rate" setting (fps60 in the ini, G_FPS60): game_uc.cpp wraps the limiter and holds the minimum at 1.
+  Turned off again, it puts back the game's default.
+
 ## Status
 - Boots through the strap and Zapper screens, the CRIWARE logo, the intro movie (Sofdec), the title, save
   creation (NAND, BIO_UC0.DAT), load / new game, difficulty, scenario, chapter ("Train Derailment 1"),

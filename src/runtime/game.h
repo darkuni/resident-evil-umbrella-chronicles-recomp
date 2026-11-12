@@ -29,3 +29,4 @@
 #define G_POINTER_GAIN_Y        0.6f          // and y * 1.25 * (16:9 / 4:3): 1/0.6
 #define G_NUNCHUK               1             // the Nunchuk is always attached (camera stick; the Zapper types need it)
 #define G_NUNCHUK_LIGHTGUN      1             // controls layout: see dist/README.txt
+#define G_FPS60                 1             // "Frame rate" setting: 60 fps instead of 30 (game_uc.cpp)

@@ -1,4 +1,5 @@
 #pragma once
+#include "game.h"
 #include <string>
 
 // Settings from the .ini file (next to the executable or in the working folder).
@@ -21,6 +22,9 @@ struct Config {
     float ir_span = 0.55f;             // real remote: share of the IR camera's view that covers the screen
     float motion_sensitivity = 1.0f;   // simulated motions: how far the mouse turns the remote
     bool capture_mouse = false;        // keep the mouse cursor inside the window while the game has focus
+#ifdef G_FPS60
+    bool fps60 = false;                // run the game's frame limiter at 60 fps instead of its own 30 (game_uc.cpp)
+#endif
 };
 extern Config g_cfg;
 void config_load(const char* exe_path);

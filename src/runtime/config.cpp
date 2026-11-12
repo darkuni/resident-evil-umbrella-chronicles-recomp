@@ -26,6 +26,9 @@ static void set(const std::string& k, const std::string& v) {
     else if (k == "ir_span") { float f = (float)atof(v.c_str()); g_cfg.ir_span = f < 0.2f ? 0.2f : f > 1.5f ? 1.5f : f; }
     else if (k == "motion_sensitivity") { float f = (float)atof(v.c_str()); g_cfg.motion_sensitivity = f < 0.2f ? 0.2f : f > 5.f ? 5.f : f; }
     else if (k == "capture_mouse") g_cfg.capture_mouse = b();
+#ifdef G_FPS60
+    else if (k == "fps60") g_cfg.fps60 = b();
+#endif
     else if (k == "msaa") { int a = atoi(v.c_str()); g_cfg.msaa = a >= 8 ? 8 : a >= 4 ? 4 : a >= 2 ? 2 : 1; }
 }
 
@@ -59,7 +62,11 @@ void config_load(const char* exe_path) {
         fclose(f);
     }
     const char* keys[] = {"resolution_scale", "vsync", "widescreen", "fullscreen", "window_scale", "controls", "show_perf",
-                          "anisotropy", "smooth_textures", "msaa", "speed", "swap_ab_xy", "capture_mouse"};
+                          "anisotropy", "smooth_textures", "msaa", "speed", "swap_ab_xy", "capture_mouse"
+#ifdef G_FPS60
+                          , "fps60"
+#endif
+    };
     for (const char* k : keys) {
         std::string env = k;
         std::transform(env.begin(), env.end(), env.begin(), ::toupper);
@@ -110,9 +117,18 @@ void config_save() {
 #else
         "; Simulated motions (hold the middle mouse button or Ctrl and move the mouse): turning speed\n"
 #endif
-        "motion_sensitivity = %.2f\n",
+        "motion_sensitivity = %.2f\n"
+#ifdef G_FPS60
+        "; 60 fps: run gameplay at 60 frames per second instead of the original 30 (1 = yes)\n"
+        "fps60 = %d\n"
+#endif
+        ,
         g_cfg.resolution_scale, g_cfg.widescreen, g_cfg.vsync, g_cfg.fullscreen, g_cfg.window_scale,
         g_cfg.controls.c_str(), g_cfg.capture_mouse, g_cfg.swap_ab_xy, g_cfg.show_perf, g_cfg.anisotropy, g_cfg.smooth_textures, g_cfg.msaa, g_cfg.speed,
-        g_cfg.wiimote, g_cfg.ir_span, g_cfg.motion_sensitivity);
+        g_cfg.wiimote, g_cfg.ir_span, g_cfg.motion_sensitivity
+#ifdef G_FPS60
+        , (int)g_cfg.fps60
+#endif
+        );
     fclose(w);
 }

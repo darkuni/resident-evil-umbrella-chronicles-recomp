@@ -50,6 +50,9 @@ static const std::vector<Item>& items() {
         {"Texture smoothing", {"Off (original)", "On (trilinear)"}, "Mipmaps: removes shimmer on distant textures."},
         {"Game speed", {"Normal", "2x", "3x", "4x", "5x", "6x", "7x", "8x"}, "Fast-forward. Hold Tab or click the right stick for a burst."},
         {"Anisotropic filter", {"Off", "2x", "4x", "8x", "16x"}, "Sharper floors and walls seen at an angle."},
+#ifdef G_FPS60
+        {"Frame rate", {"30 fps (original)", "60 fps"}, "Gameplay frame rate. The game times itself from the frame length."},
+#endif
         {"Close menu", {}, nullptr},
         {"Quit game", {}, nullptr},
     };
@@ -69,6 +72,9 @@ static int get_value(int i) {
         case 9: return g_cfg.smooth_textures ? 1 : 0;
         case 10: return std::max(1, std::min(8, g_cfg.speed)) - 1;
         case 11: return g_cfg.anisotropy >= 16 ? 4 : g_cfg.anisotropy >= 8 ? 3 : g_cfg.anisotropy >= 4 ? 2 : g_cfg.anisotropy >= 2 ? 1 : 0;
+#ifdef G_FPS60
+        case 12: return g_cfg.fps60 ? 1 : 0;
+#endif
     }
     return 0;
 }
@@ -86,6 +92,9 @@ static void set_value(int i, int v) {
         case 9: g_cfg.smooth_textures = v; break;
         case 10: g_cfg.speed = v + 1; break;
         case 11: g_cfg.anisotropy = v ? 1 << v : 1; break;
+#ifdef G_FPS60
+        case 12: g_cfg.fps60 = v; break;
+#endif
     }
     config_save();
 }
