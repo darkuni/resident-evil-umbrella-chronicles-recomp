@@ -17,7 +17,14 @@ uint32_t mmio_peek(uint32_t a);
 static const int kFmtSize[8] = {1, 1, 2, 2, 4, 0, 0, 0};
 static const int kClrSize[8] = {2, 3, 4, 2, 3, 4, 0, 0};
 
+static int g_vsize_cache[8]; static uint8_t g_vsize_ok = 0;   // per VAT, cleared on any CP change
+static int gx_vertex_size_calc(int vat);
 int gx_vertex_size(int vat) {
+    vat &= 7;
+    if (!(g_vsize_ok & (1u << vat))) { g_vsize_cache[vat] = gx_vertex_size_calc(vat); g_vsize_ok |= 1u << vat; }
+    return g_vsize_cache[vat];
+}
+static int gx_vertex_size_calc(int vat) {
     const uint32_t lo = g_gx.cp[0x50], hi = g_gx.cp[0x60];
     const uint32_t A = g_gx.cp[0x70 + vat], B = g_gx.cp[0x80 + vat], C = g_gx.cp[0x90 + vat];
     int size = 0;
@@ -115,7 +122,10 @@ static long parse_cmd(const uint8_t* p, size_t n, bool in_dl) {
         case 0x00: return 1;                                   // NOP
         case 0x08:                                             // load CP
             if (n < 6) return 0;
-            g_gx.cp[p[1]] = rd32(p + 2); gx_cp_written();
+            {   // games re-send CP state per draw: only a change invalidates the decoded vertex setup
+                uint32_t v = rd32(p + 2);
+                if (g_gx.cp[p[1]] != v) { g_gx.cp[p[1]] = v; g_vsize_ok = 0; gx_cp_written(); }
+            }
             return 6;
         case 0x10: {                                           // load XF
             if (n < 5) return 0;

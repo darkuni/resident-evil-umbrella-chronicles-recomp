@@ -11,6 +11,8 @@ file(GLOB GEN_SRC gen/*.cpp)
 file(GLOB RT_SRC runtime/*.cpp)
 add_executable(umbrellachronicles ${RT_SRC} ${GEN_SRC})
 target_include_directories(umbrellachronicles PRIVATE runtime gen)
+# the per-vertex graphics path: worth the extra optimization
+set_source_files_properties(runtime/gx_render.cpp runtime/gx_fifo.cpp PROPERTIES COMPILE_OPTIONS "-O3")
 if(WIN32)
   # SDL2 development package (SDL2-devel-*-mingw) location
   set(SDL2_DIR "" CACHE PATH "SDL2 mingw dev package root (x86_64-w64-mingw32 subfolder)")

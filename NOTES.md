@@ -49,6 +49,23 @@ in Shadow (copied from the House of the Dead: Overkill repo).
 - "Frame rate" setting (fps60 in the ini, G_FPS60): game_uc.cpp wraps the limiter and holds the minimum at 1.
   Turned off again, it puts back the game's default.
 
+## Performance (60 fps)
+- Gameplay at 60 fps needs a frame under 16.7 ms. Shane's log at 60 fps: 30.0 fps, emulation thread ~65% busy
+  (~22 ms per frame), "GPU draw" ~35% (~12 ms per frame in gx_draw), ~18,000-23,000 GX draws and ~100,000
+  vertices per frame (all transformed and lit on the CPU), batched into ~400-550 GL draws.
+- Container profile (SIGPROF, PROFILE=): vertex path (light_channel, gx_draw with transform inlined,
+  decode_vertex, setup_draw_state) the largest per-frame cost; AXFXReverbHiExpCallback and the DSP mixer look
+  big only because audio runs in real time while the software-GL frames are slow.
+- Changes: CP / XF register writes only invalidate the vertex setup when the value changes (318 rebuilds per
+  gameplay frame); vertex sizes cached per VAT; vertices transformed straight into the batch (no temporary,
+  no zero-fill); color + alpha lit in one pass when they share the light setup; decode loops only over the
+  attributes present; gx_render / gx_fifo at -O3; rdtsc for the draw/copy timing (two clock calls per draw
+  cost ~1 ms a frame); guest memory helpers always inlined; trace_call inline (ring write; TRACEFN takes the
+  slow path); dispatch() has a direct-mapped cache in front of its binary search. The perf log adds vertices
+  and vertex-setup rebuilds per frame.
+- Closing the window / Quit: std::_Exit after flushing the log (exit() with the game's threads running made
+  the C runtime abort: "signal 22").
+
 ## Status
 - Boots through the strap and Zapper screens, the CRIWARE logo, the intro movie (Sofdec), the title, save
   creation (NAND, BIO_UC0.DAT), load / new game, difficulty, scenario, chapter ("Train Derailment 1"),

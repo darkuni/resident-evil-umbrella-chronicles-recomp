@@ -293,7 +293,14 @@ static const FnEntry* containing(uint32_t a) {
 GuestFn lookup(uint32_t t) { auto e = find_fn(t); return e ? e->fn : nullptr; }
 
 void dispatch(Ctx* c, uint32_t t) {
+    // indirect calls (C++ virtual functions) are frequent: a direct-mapped cache in front of the binary search
+    // (one 64-bit word per slot: address << 32 | table index + 1, so a reader never sees half an update)
+    static std::atomic<uint64_t> cache[4096];
+    std::atomic<uint64_t>& s = cache[(t >> 2) & 4095];
+    uint64_t v = s.load(std::memory_order_relaxed);
+    if ((uint32_t)(v >> 32) == t && (uint32_t)v) { FN_TABLE[(uint32_t)v - 1].fn(c); return; }
     auto e = find_fn(t);
+    if (e) s.store((uint64_t)t << 32 | (uint64_t)(e - FN_TABLE + 1), std::memory_order_relaxed);
     if (!e) {
         extern uint32_t rel_virtual(uint32_t);
         if (uint32_t v = rel_virtual(t)) e = find_fn(v);
@@ -316,7 +323,10 @@ void stub_log(uint32_t a) {
 }
 static std::unordered_map<uint32_t, uint32_t> trace_counts;
 static unsigned long trace_seq = 0;
-static uint32_t ring[64]; static unsigned ring_i = 0;
+uint32_t g_call_ring[64]; unsigned g_call_ring_i = 0;
+#define ring g_call_ring
+#define ring_i g_call_ring_i
+bool g_trace_watch = getenv("TRACEFN") != nullptr;
 static void dump_ring() {
     fprintf(LOG, "--- last traced calls (oldest first) ---\n");
     for (unsigned k = 0; k < 64; k++) {
@@ -326,8 +336,7 @@ static void dump_ring() {
         fprintf(LOG, "  %08X %s\n", a, e ? e->name : "?");
     }
 }
-void trace_call(uint32_t a) {
-    ring[ring_i++ & 63] = a;
+void trace_call_slow(uint32_t a) {
     static std::vector<uint32_t> watch = [] {   // TRACEFN=addr,addr,...: log every call to these
         std::vector<uint32_t> v; const char* e = getenv("TRACEFN");
         for (const char* p = e; p && *p;) { v.push_back((uint32_t)strtoul(p, (char**)&p, 16)); if (*p == ',') p++; else break; }

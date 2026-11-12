@@ -150,6 +150,14 @@ static void picture_rect(int ww, int wh, float& dx, float& dy, float& dw, float&
 //   Pad:   right stick twists (left/right) and tilts (up/down); hold LT (or LB) to shake.
 // Output: g_host_input.acc (KPAD convention, gravity sense) and .roll. A real Wii Remote, when
 // connected, supplies these itself (wiimote.cpp).
+// Leaving: the game's threads are still running, so skip the C runtime's exit handlers and static
+// destructors (they tear down objects those threads use, and the CRT aborts): flush the log and go.
+extern FILE* g_log;
+[[noreturn]] static void quit_now() {
+    if (g_log) fflush(g_log);
+    fflush(stdout); fflush(stderr);
+    std::_Exit(0);
+}
 void wiimote_poll();
 static int g_wheel = 0;
 static float g_impulse_t = 0, g_impulse_dir = 0;
@@ -404,7 +412,7 @@ static std::atomic<bool> g_vsync_dirty{false};
 static void apply_action(int a) {
     if (a == OV_FULLSCREEN) SDL_SetWindowFullscreen(g_win, g_cfg.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
     else if (a == OV_VSYNC) g_vsync_dirty = true;
-    else if (a == OV_QUIT) exit(0);
+    else if (a == OV_QUIT) quit_now();
 }
 
 // Window/input pump (UI thread only).
@@ -412,7 +420,7 @@ bool gl_platform_poll() { return true; }
 static bool ui_poll() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_QUIT) exit(0);
+        if (e.type == SDL_QUIT) quit_now();
         if (e.type == SDL_KEYDOWN) {
             SDL_Keycode k = e.key.keysym.sym;
             if (k == SDLK_F1 || k == SDLK_ESCAPE) {

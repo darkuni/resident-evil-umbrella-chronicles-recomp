@@ -41,10 +41,10 @@ extern uint32_t g_rwatch_lo, g_rwatch_hi;
 #else
 #define RWATCHCHK(a) do {} while (0)
 #endif
-static inline uint8_t R8(uint32_t a) { RWATCHCHK(a); if (is_mmio(a)) return (uint8_t)mmio_read(a, 1); return MEM[xl(a)]; }
-static inline uint16_t R16(uint32_t a) { RWATCHCHK(a); if (is_mmio(a)) return (uint16_t)mmio_read(a, 2); uint16_t v; memcpy(&v, MEM + xl(a), 2); return __builtin_bswap16(v); }
-static inline uint32_t R32(uint32_t a) { RWATCHCHK(a); if (is_mmio(a)) return mmio_read(a, 4); uint32_t v; memcpy(&v, MEM + xl(a), 4); return __builtin_bswap32(v); }
-static inline uint64_t R64(uint32_t a) { uint64_t v; memcpy(&v, MEM + xl(a), 8); return __builtin_bswap64(v); }
+static inline __attribute__((always_inline)) uint8_t R8(uint32_t a) { RWATCHCHK(a); if (is_mmio(a)) return (uint8_t)mmio_read(a, 1); return MEM[xl(a)]; }
+static inline __attribute__((always_inline)) uint16_t R16(uint32_t a) { RWATCHCHK(a); if (is_mmio(a)) return (uint16_t)mmio_read(a, 2); uint16_t v; memcpy(&v, MEM + xl(a), 2); return __builtin_bswap16(v); }
+static inline __attribute__((always_inline)) uint32_t R32(uint32_t a) { RWATCHCHK(a); if (is_mmio(a)) return mmio_read(a, 4); uint32_t v; memcpy(&v, MEM + xl(a), 4); return __builtin_bswap32(v); }
+static inline __attribute__((always_inline)) uint64_t R64(uint32_t a) { uint64_t v; memcpy(&v, MEM + xl(a), 8); return __builtin_bswap64(v); }
 #ifdef MEMWATCH
 void memwatch_hit(uint32_t a);
 extern uint32_t g_watch_lo, g_watch_hi;
@@ -52,10 +52,10 @@ extern uint32_t g_watch_lo, g_watch_hi;
 #else
 #define WATCHCHK(a) do {} while (0)
 #endif
-static inline void W8(uint32_t a, uint8_t v) { WATCHCHK(a); if (is_mmio(a)) { mmio_write(a, v, 1); return; } MEM[xl(a)] = v; }
-static inline void W16(uint32_t a, uint16_t v) { WATCHCHK(a); if (is_mmio(a)) { mmio_write(a, v, 2); return; } v = __builtin_bswap16(v); memcpy(MEM + xl(a), &v, 2); }
-static inline void W32(uint32_t a, uint32_t v) { WATCHCHK(a); if (is_mmio(a)) { mmio_write(a, v, 4); return; } v = __builtin_bswap32(v); memcpy(MEM + xl(a), &v, 4); }
-static inline void W64(uint32_t a, uint64_t v) { WATCHCHK(a); v = __builtin_bswap64(v); memcpy(MEM + xl(a), &v, 8); }
+static inline __attribute__((always_inline)) void W8(uint32_t a, uint8_t v) { WATCHCHK(a); if (is_mmio(a)) { mmio_write(a, v, 1); return; } MEM[xl(a)] = v; }
+static inline __attribute__((always_inline)) void W16(uint32_t a, uint16_t v) { WATCHCHK(a); if (is_mmio(a)) { mmio_write(a, v, 2); return; } v = __builtin_bswap16(v); memcpy(MEM + xl(a), &v, 2); }
+static inline __attribute__((always_inline)) void W32(uint32_t a, uint32_t v) { WATCHCHK(a); if (is_mmio(a)) { mmio_write(a, v, 4); return; } v = __builtin_bswap32(v); memcpy(MEM + xl(a), &v, 4); }
+static inline __attribute__((always_inline)) void W64(uint32_t a, uint64_t v) { WATCHCHK(a); v = __builtin_bswap64(v); memcpy(MEM + xl(a), &v, 8); }
 
 static inline float u2f(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
 static inline uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
@@ -148,7 +148,16 @@ void unimpl(Ctx* c, uint32_t pc, const char* what);
 typedef void (*GuestFn)(Ctx*);
 void dispatch(Ctx* c, uint32_t target);           // indirect call
 GuestFn lookup(uint32_t target);
-void trace_call(uint32_t addr);
+// Every recompiled function starts with trace_call: the last 64 calls go into a ring for crash logs;
+// TRACEFN debugging (g_trace_watch) takes the slow path.
+extern uint32_t g_call_ring[64];
+extern unsigned g_call_ring_i;
+extern bool g_trace_watch;
+void trace_call_slow(uint32_t addr);
+static inline __attribute__((always_inline)) void trace_call(uint32_t addr) {
+    g_call_ring[g_call_ring_i++ & 63] = addr;
+    if (__builtin_expect(g_trace_watch, 0)) trace_call_slow(addr);
+}
 void stub_log(uint32_t addr);
 #include <atomic>
 extern std::atomic<int> g_irq_pending;

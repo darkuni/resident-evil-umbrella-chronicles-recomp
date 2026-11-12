@@ -40,7 +40,12 @@ char g_perf_text[128] = "";
 static uint64_t g_ns_draw = 0, g_ns_copy = 0;
 static uint64_t g_batches = 0, g_draw_calls_in = 0;
 static inline uint64_t now_ns_r();
-struct ScopeNs { uint64_t& acc; uint64_t t; ScopeNs(uint64_t& a) : acc(a), t(now_ns_r()) {} ~ScopeNs() { acc += now_ns_r() - t; } };
+// draw/copy timing for the perf line: CPU timestamp counter ticks (two clock calls per draw cost a
+// millisecond a frame at 20,000 draws); reported as a share of the ticks in the interval
+#include <x86intrin.h>
+static inline uint64_t ticks() { return __rdtsc(); }
+struct ScopeNs { uint64_t& acc; uint64_t t; ScopeNs(uint64_t& a) : acc(a), t(ticks()) {} ~ScopeNs() { acc += ticks() - t; } };
+static uint64_t g_verts_in = 0, g_setup_rebuilds = 0;
 static inline uint64_t now_ns_r() { return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 static bool g_gxdbg = getenv("GXDEBUG") != nullptr;
 static long g_fdump = getenv("FRAMEDUMP") ? atol(getenv("FRAMEDUMP")) : -1;
@@ -248,6 +253,8 @@ struct DrawSetup {
     int ncol, ntg; bool dual;
     uint32_t tginfo[8], pinfo[8];
     ChanP ch[2][2];   // [channel][0 = color, 1 = alpha]
+    bool same[2];     // color and alpha of the channel use identical light settings
+    int ntex, ntexidx; uint8_t texl[8], texidxl[8];   // texcoords / texture matrix indices present
     LightP lights[8];
 };
 static DrawSetup g_ds;
@@ -260,6 +267,7 @@ void gx_cp_written() { g_vtx_dirty = true; }
 static void setup_vertex_pipeline(int vat) {
     if (!g_vtx_dirty && vat == g_vtx_vat) return;
     g_vtx_dirty = false; g_vtx_vat = vat;
+    g_setup_rebuilds++;
     DrawSetup& d = g_ds;
     const uint32_t lo = g_gx.cp[0x50], hi = g_gx.cp[0x60];
     const uint32_t A = g_gx.cp[0x70 + vat], B = g_gx.cp[0x80 + vat], C = g_gx.cp[0x90 + vat];
@@ -284,6 +292,8 @@ static void setup_vertex_pipeline(int vat) {
     const int tfrac[8] = {(int)((A >> 25) & 31), (int)((B >> 4) & 31), (int)((B >> 13) & 31), (int)((B >> 22) & 31), (int)(C & 31),
                           (int)((C >> 9) & 31), (int)((C >> 18) & 31), (int)((C >> 27) & 31)};
     for (int i = 0; i < 8; i++) { d.tt[i] = (hi >> (2 * i)) & 3; d.tcnt[i] = tcnt[i]; d.tfmt[i] = tfmt[i]; d.tscale[i] = 1.0f / (float)(1 << tfrac[i]); }
+    d.ntex = 0; for (int i = 0; i < 8; i++) if (d.tt[i]) d.texl[d.ntex++] = (uint8_t)i;
+    d.ntexidx = 0; for (int i = 0; i < 8; i++) if (d.tex_direct[i]) d.texidxl[d.ntexidx++] = (uint8_t)i;
     // projection / viewport
     for (int i = 0; i < 6; i++) d.P[i] = xff(0x1020 + i);
     d.ortho = g_gx.xf_reg[0x26] != 0;
@@ -313,6 +323,11 @@ static void setup_vertex_pipeline(int vat) {
         cp.nl = 0;
         if (cp.light) for (int l = 0; l < 8; l++) if (mask & (1 << l)) { cp.li[cp.nl++] = (uint8_t)l; any_light = true; }
     }
+    for (int c = 0; c < 2; c++) {   // color and alpha lit by the same lights the same way: one pass for both
+        const ChanP& a = d.ch[c][0]; const ChanP& b = d.ch[c][1];
+        d.same[c] = a.light && b.light && a.nl == b.nl && a.dfn == b.dfn && a.attn == b.attn && a.spot == b.spot &&
+                    memcmp(a.li, b.li, a.nl) == 0;
+    }
     if (any_light) for (int l = 0; l < 8; l++) {
         uint32_t base = 0x600 + l * 16;
         LightP& L = d.lights[l];
@@ -334,7 +349,8 @@ static inline const uint8_t* index_ptr(const uint8_t*& p, int type, int arr) {
 static void decode_vertex(const uint8_t*& p, RawVtx& v) {
     const DrawSetup& d = g_ds;
     v.pnidx = d.pn_direct ? (*p++ & 63) : d.def_pn;
-    for (int i = 0; i < 8; i++) v.texidx[i] = d.tex_direct[i] ? (*p++ & 63) : d.def_tex[i];
+    for (int i = 0; i < 8; i++) v.texidx[i] = d.def_tex[i];
+    for (int j = 0; j < d.ntexidx; j++) v.texidx[d.texidxl[j]] = *p++ & 63;
     if (d.pt) {
         const uint8_t* q = d.pt >= 2 ? index_ptr(p, d.pt, 0) : nullptr;
         const uint8_t*& r = q ? q : p;
@@ -358,9 +374,8 @@ static void decode_vertex(const uint8_t*& p, RawVtx& v) {
         else read_color(d.cfmt[k], p, v.col[k]);
         v.has_col[k] = true;
     }
-    for (int i = 0; i < 8; i++) {
-        int t = d.tt[i];
-        if (!t) continue;
+    for (int j = 0; j < d.ntex; j++) {
+        const int i = d.texl[j], t = d.tt[i];
         const uint8_t* q = t >= 2 ? index_ptr(p, t, 4 + i) : nullptr;
         const uint8_t*& r = q ? q : p;
         v.tex[i][0] = read_comp(d.tfmt[i], d.tscale[i], r);
@@ -407,6 +422,43 @@ static inline void light_channel(const ChanP& cp, bool alpha, const float* vpos,
     else for (int i = 0; i < 3; i++) out[i] = mat[i] * lit[i];
 }
 
+// Color and alpha with the same lights, diffuse function and attenuation: sum the lights once
+// (lit = ambient + sum), then take rgb for the color and a for the alpha, each with its own ambient and material.
+static inline void light_both(const ChanP& cc, const ChanP& ca, const float* vpos, const float* n, const float* vcol, float* out) {
+    float sum[4] = {0, 0, 0, 0};
+    for (int j = 0; j < cc.nl; j++) {
+        const LightP& Lp = g_ds.lights[cc.li[j]];
+        float L[3] = {Lp.lp[0] - vpos[0], Lp.lp[1] - vpos[1], Lp.lp[2] - vpos[2]};
+        float dist2 = L[0] * L[0] + L[1] * L[1] + L[2] * L[2], dist = std::sqrt(dist2);
+        if (dist > 0) { float inv = 1.f / dist; L[0] *= inv; L[1] *= inv; L[2] *= inv; }
+        float ndl = n[0] * L[0] + n[1] * L[1] + n[2] * L[2];
+        float diff = cc.dfn == 0 ? 1.f : cc.dfn == 1 ? ndl : std::max(ndl, 0.f);
+        float att = 1.f;
+        if (cc.attn) {
+            if (cc.spot) {
+                float cs = std::max(0.f, -(L[0] * Lp.ld[0] + L[1] * Lp.ld[1] + L[2] * Lp.ld[2]));
+                float num = std::max(0.f, Lp.a0 + Lp.a1 * cs + Lp.a2 * cs * cs);
+                float den = Lp.k0 + Lp.k1 * dist + Lp.k2 * dist2;
+                att = den != 0 ? num / den : 0;
+            } else {
+                float ndh = n[0] * Lp.ld[0] + n[1] * Lp.ld[1] + n[2] * Lp.ld[2];
+                float s = ndl > 0 ? std::max(0.f, ndh) : 0.f;
+                float num = std::max(0.f, Lp.a0 + Lp.a1 * s + Lp.a2 * s * s);
+                float den = Lp.k0 + Lp.k1 * s + Lp.k2 * s * s;
+                att = den != 0 ? num / den : 0;
+            }
+        }
+        float f = diff * att;
+        for (int i = 0; i < 4; i++) sum[i] += f * Lp.col[i];
+    }
+    const float* matc = cc.mat_vtx ? vcol : cc.mat;
+    const float* ambc = cc.amb_vtx ? vcol : cc.amb;
+    for (int i = 0; i < 3; i++) out[i] = matc[i] * std::min(1.f, std::max(0.f, ambc[i] + sum[i]));
+    const float* mata = ca.mat_vtx ? vcol : ca.mat;
+    const float* amba = ca.amb_vtx ? vcol : ca.amb;
+    out[3] = mata[3] * std::min(1.f, std::max(0.f, amba[3] + sum[3]));
+}
+
 // ---------------------------------------------------------------- transform
 static void transform(const RawVtx& r, Vtx& o) {
     const DrawSetup& d = g_ds;
@@ -439,8 +491,11 @@ static void transform(const RawVtx& r, Vtx& o) {
         float* out = k == 0 ? o.c0 : o.c1;
         if (k >= d.ncol) { out[0] = out[1] = out[2] = out[3] = 0; continue; }
         const float* vc = r.col[k];
-        light_channel(d.ch[k][0], false, p, n, vc, out);
-        light_channel(d.ch[k][1], true, p, n, vc, out);
+        if (d.same[k]) light_both(d.ch[k][0], d.ch[k][1], p, n, vc, out);
+        else {
+            light_channel(d.ch[k][0], false, p, n, vc, out);
+            light_channel(d.ch[k][1], true, p, n, vc, out);
+        }
     }
     // texgen
     for (int i = 0; i < 8; i++) {
@@ -739,8 +794,8 @@ static void apply_state() {
 void gx_xf_write(uint32_t addr, uint32_t val) {
     static long fd = getenv("FRAMEDUMP") ? atol(getenv("FRAMEDUMP")) : -1;
     if ((long)g_frame == fd && addr < 0x0C) fprintf(g_log, "[xf] %03X = %08X (%f)\n", addr, val, u2f(val));
-    if (addr < 0x1000) { g_gx.xf_mem[addr] = val; if (addr >= 0x600) g_vtx_dirty = true; }
-    else if (addr < 0x1100) { g_gx.xf_reg[addr - 0x1000] = val; g_vtx_dirty = true; }
+    if (addr < 0x1000) { if (addr >= 0x600 && g_gx.xf_mem[addr] != val) g_vtx_dirty = true; g_gx.xf_mem[addr] = val; }
+    else if (addr < 0x1100) { if (g_gx.xf_reg[addr - 0x1000] != val) g_vtx_dirty = true; g_gx.xf_reg[addr - 0x1000] = val; }
 }
 void gx_xf_indexed(uint8_t op, uint32_t arg) {
     static long fd = getenv("FRAMEDUMP") ? atol(getenv("FRAMEDUMP")) : -1;
@@ -902,6 +957,7 @@ static void efb_copy_impl(uint32_t val) {
             static bool perf = getenv("PERF") != nullptr;
 #endif
             extern uint64_t g_vi_count, g_ax_frames;
+            static uint64_t tk0 = ticks();
             static uint64_t vi0 = 0, ax0 = 0;
             uint64_t t = now_ns_r();
             static uint64_t pt0 = t, pf0 = 0;
@@ -922,11 +978,14 @@ static void efb_copy_impl(uint32_t val) {
                           (unsigned long long)(a.underruns - u0), (unsigned long long)(a.dropped_frames - d0), (unsigned long long)(g_ai_skipped - k0), a.buffered_ms);
                   u0 = a.underruns; d0 = a.dropped_frames; k0 = g_ai_skipped; }
                 fprintf(g_log, "[perf] %.1f fps | VI %.1f/s (want 59.9) | audio %.0f/s (want 333) | GPU draw %.0f%%, copies %.0f%% of time | %.0f draws -> %.0f GL calls per frame\n",
-                        (g_frame - f0) / sec, (g_vi_count - vi0) / sec, (g_ax_frames - ax0) / sec, g_ns_draw / 1e7 / sec, g_ns_copy / 1e7 / sec,
+                        (g_frame - f0) / sec, (g_vi_count - vi0) / sec, (g_ax_frames - ax0) / sec, 100.0 * g_ns_draw / std::max<uint64_t>(1, ticks() - tk0), 100.0 * g_ns_copy / std::max<uint64_t>(1, ticks() - tk0),
                         (double)g_draw_calls_in / std::max<uint64_t>(1, g_frame - f0), (double)g_batches / std::max<uint64_t>(1, g_frame - f0));
                 g_draw_calls_in = g_batches = 0;
                 fflush(g_log);
-                t0 = t; f0 = g_frame; g_ns_draw = g_ns_copy = 0; vi0 = g_vi_count; ax0 = g_ax_frames;
+                {   const double fr = (double)std::max<uint64_t>(1, g_frame - f0);
+                    fprintf(g_log, "[perf] per frame: %.0f vertices, %.0f vertex-setup rebuilds\n", g_verts_in / fr, g_setup_rebuilds / fr);
+                    g_verts_in = g_setup_rebuilds = 0; }
+                t0 = t; tk0 = ticks(); f0 = g_frame; g_ns_draw = g_ns_copy = 0; vi0 = g_vi_count; ax0 = g_ax_frames;
             }
         }
         if (g_gxdbg && g_frame % 60 == 0) fprintf(g_log, "[frame %llu] draws %d copy %dx%d%s\n", (unsigned long long)g_frame, g_frame_draws, w, h, g_frame_tex.c_str());
@@ -1106,7 +1165,17 @@ void gx_bp_hook(uint32_t reg, uint32_t val) {
 // pipeline state (BP registers) is unchanged, and go to GL as one draw call.
 // Vertex transform runs on the CPU, so XF/CP changes never break a batch.
 // Vertices are stored once each and the triangles as indices (quads and strips share vertices).
-static std::vector<Vtx> g_batch;
+struct VtxBuf {   // transformed vertices of the open batch; grows, never zero-fills
+    Vtx* p = nullptr; size_t n = 0, cap = 0;
+    Vtx* grow(size_t k) {
+        if (n + k > cap) { cap = std::max<size_t>(n + k, cap ? cap * 2 : 65536); p = (Vtx*)realloc(p, cap * sizeof(Vtx)); }
+        Vtx* r = p + n; n += k; return r;
+    }
+    size_t size() const { return n; }
+    const Vtx* data() const { return p; }
+    void clear() { n = 0; }
+};
+static VtxBuf g_batch;
 static std::vector<uint32_t> g_bidx;
 static bool g_batch_open = false;
 static GLuint g_ibo = 0;
@@ -1203,14 +1272,40 @@ static void setup_draw_state(uint8_t prim, uint32_t count, const std::vector<Vtx
     apply_state();
 }
 
+static void append_indices(uint8_t prim, uint32_t base, uint32_t count);
 void gx_draw(uint8_t prim, int vat, uint32_t count, const uint8_t* data, int vsize) {
     ScopeNs _sc(g_ns_draw);
     if (!ensure_gl() || count == 0) return;
     g_frame_draws++;
     g_draw_calls_in++;
+    g_verts_in += count;
+    setup_vertex_pipeline(vat);
+    bool tris = prim == 0x80 || prim == 0x90 || prim == 0x98 || prim == 0xA0;
+    static const bool dbg = getenv("FRAMEDUMP") || getenv("TEXDUMP");
+    static bool nobatch = getenv("GX_NOBATCH") != nullptr;
+    if (tris && !dbg) {
+        // fast path: transform straight into the open batch
+        if (!g_batch_open) {
+            static const std::vector<Vtx> none;   // only the debug dumps look at the vertices
+            setup_draw_state(prim, count, none);
+            g_batch_open = true;
+        }
+        const uint32_t base = (uint32_t)g_batch.size();
+        Vtx* out = g_batch.grow(count);
+        const uint8_t* p = data;
+        RawVtx r;
+        for (uint32_t i = 0; i < count; i++) {
+            const uint8_t* start = p;
+            decode_vertex(p, r);
+            p = start + vsize;
+            transform(r, out[i]);
+        }
+        append_indices(prim, base, count);
+        if (nobatch) gx_flush();
+        return;
+    }
     static std::vector<Vtx> verts;
     verts.resize(count);
-    setup_vertex_pipeline(vat);
     const uint8_t* p = data;
     RawVtx r;   // fields the format doesn't carry keep their defaults for the whole draw
     for (uint32_t i = 0; i < count; i++) {
@@ -1219,7 +1314,6 @@ void gx_draw(uint8_t prim, int vat, uint32_t count, const uint8_t* data, int vsi
         p = start + vsize;
         transform(r, verts[i]);
     }
-    bool tris = prim == 0x80 || prim == 0x90 || prim == 0x98 || prim == 0xA0;
     if (!tris) {
         // lines / points: drawn on their own
         gx_flush();
@@ -1295,7 +1389,13 @@ void gx_draw(uint8_t prim, int vat, uint32_t count, const uint8_t* data, int vsi
     }
     // append: vertices once, triangles as indices (winding preserved)
     const uint32_t base = (uint32_t)g_batch.size();
-    g_batch.insert(g_batch.end(), verts.begin(), verts.begin() + count);
+    memcpy(g_batch.grow(count), verts.data(), count * sizeof(Vtx));
+    append_indices(prim, base, count);
+    if (nobatch) gx_flush();
+}
+
+// triangles of a GX primitive as indices into the batch (winding preserved)
+static void append_indices(uint8_t prim, uint32_t base, uint32_t count) {
     std::vector<uint32_t>& b = g_bidx;
     switch (prim) {
         case 0x80:   // quads
@@ -1316,6 +1416,4 @@ void gx_draw(uint8_t prim, int vat, uint32_t count, const uint8_t* data, int vsi
             for (uint32_t i = 1; i + 1 < count; i++) b.insert(b.end(), {base, base + i, base + i + 1});
             break;
     }
-    static bool nobatch = getenv("GX_NOBATCH") != nullptr;
-    if (nobatch) gx_flush();
 }
