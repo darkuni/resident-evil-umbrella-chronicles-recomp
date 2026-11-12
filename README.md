@@ -12,7 +12,7 @@ In progress: boots through the logos, intro movie, title, saves and menus to equ
 
 ## Download
 
-[Releases](https://github.com/darkuni/umbrella-chronicles-recomp/releases): Windows zip and Linux tar.gz.
+[Releases](https://github.com/darkuni/resident-evil-umbrella-chronicles-recomp/releases): Windows zip and Linux tar.gz.
 Unpack, put your disc image in the same folder and run `umbrellachronicles.exe` (Windows) or `./umbrellachronicles` (Linux /
 Steam Deck): the first start builds the `game` folder from it. The zip's `README.txt` has the controls.
 

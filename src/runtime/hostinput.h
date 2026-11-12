@@ -31,5 +31,10 @@ struct HostInput {
     uint32_t remote_buttons = 0; // WPAD button bits
     bool remote_ir = false;      // it sees the sensor bar: rpx/rpy is its pointer
     float rpx = 0.5f, rpy = 0.5f;
+    bool remote_ext = false;     // a Nunchuk is plugged into the real remote: remote_buttons has C/Z
+    float remote_nsx = 0, remote_nsy = 0;   // its stick, -1..1, y up
+    float remote_nacc[3] = {0.f, -1.f, 0.f};   // its accelerometer (KPAD convention)
+    // Nunchuk motion (simulated: G / left stick click shakes it), KPAD convention like acc
+    float nacc[3] = {0.f, -1.f, 0.f};
 };
 extern HostInput g_host_input;

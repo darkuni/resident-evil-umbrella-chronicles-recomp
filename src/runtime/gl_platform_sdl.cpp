@@ -160,7 +160,7 @@ static bool update_motion(float dt, bool focus, Uint32 mb, float srx, float sry)
     static float t = 0;
     t += dt;
     const Uint8* k = SDL_GetKeyboardState(nullptr);
-#ifdef G_RELOAD_OFFSCREEN
+#if defined(G_RELOAD_OFFSCREEN) || defined(G_RELOAD_SHAKE)
     const bool mid_motion = false;   // the middle button reloads in this game; Ctrl still turns the remote
 #else
     const bool mid_motion = true;
@@ -205,9 +205,15 @@ static bool update_motion(float dt, bool focus, Uint32 mb, float srx, float sry)
     if (g_wheel) { g_impulse_dir = g_wheel > 0 ? 1.f : -1.f; g_impulse_t = 0.14f; g_wheel = 0; }
     if (g_impulse_t > 0) { lin[2] += g_impulse_dir * (g_impulse_t > 0.07f ? 3.f : -2.f); g_impulse_t -= dt; }
     // shake
+#ifdef G_NUNCHUK_LIGHTGUN
+    // LB is the Nunchuk's Z here: only LT shakes on a gamepad
+    bool shake = k[SDL_SCANCODE_LSHIFT] || k[SDL_SCANCODE_RSHIFT] ||
+                 (g_pad && SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16000);
+#else
     bool shake = k[SDL_SCANCODE_LSHIFT] || k[SDL_SCANCODE_RSHIFT] ||
                  (g_pad && (SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16000 ||
                             SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)));
+#endif
 #ifdef G_RELOAD_SHAKE
     // the game reloads when the remote is shaken: middle mouse button and V shake too (LB / LT already do)
     shake = shake || (g_host_input.mouse & MOUSE_M) || k[SDL_SCANCODE_V];
@@ -220,6 +226,16 @@ static bool update_motion(float dt, bool focus, Uint32 mb, float srx, float sry)
         g_host_input.acc[1] = -std::cos(r) * std::cos(p) - lin[1];
         g_host_input.acc[2] = -std::sin(p) - lin[2];
         g_host_input.roll = r;
+    }
+    {   // Nunchuk: G or the left stick click shakes it (a real Nunchuk on a real remote reports its own)
+        bool nshake = !overlay_open() && (k[SDL_SCANCODE_G] ||
+                      (g_pad && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSTICK)));
+        float w = nshake ? std::sin(t * 2 * 3.14159f * 7.f) : 0.f;
+        if (g_host_input.remote && g_host_input.remote_ext) {
+            for (int i = 0; i < 3; i++) g_host_input.nacc[i] = g_host_input.remote_nacc[i];
+        } else {
+            g_host_input.nacc[0] = -3.f * w; g_host_input.nacc[1] = -1.f - 2.5f * w; g_host_input.nacc[2] = 0.f;
+        }
     }
     return mode;
 }
@@ -290,14 +306,22 @@ static void update_input() {
     if (k[SDL_SCANCODE_J]) b |= IN_ALT_LEFT;
     if (k[SDL_SCANCODE_L]) b |= IN_ALT_RIGHT;
     if (k[SDL_SCANCODE_X]) b |= IN_SOUTH;
+#ifdef G_NUNCHUK_LIGHTGUN
+    if (k[SDL_SCANCODE_Z]) b |= IN_L1;      // Nunchuk Z (C is the C key)
+#else
     if (k[SDL_SCANCODE_Z]) b |= IN_EAST;
+#endif
 #ifdef G_NUNCHUK
     // Nunchuk games: WASD is the Nunchuk stick, Space = A, 1/2 = the remote's 1/2
     if (k[SDL_SCANCODE_A]) lx -= 1;
     if (k[SDL_SCANCODE_D]) lx += 1;
     if (k[SDL_SCANCODE_W]) ly += 1;
     if (k[SDL_SCANCODE_S]) ly -= 1;
+#ifdef G_NUNCHUK_LIGHTGUN
+    if (k[SDL_SCANCODE_SPACE]) b |= IN_EAST;    // Space = B, the trigger
+#else
     if (k[SDL_SCANCODE_SPACE]) b |= IN_SOUTH;
+#endif
     if (k[SDL_SCANCODE_1]) b |= IN_WEST;
     if (k[SDL_SCANCODE_2]) b |= IN_NORTH;
 #else

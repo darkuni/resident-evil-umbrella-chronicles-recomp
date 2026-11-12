@@ -125,6 +125,20 @@ static uint32_t remote_buttons(float& sx, float& sy) {
         if (b & IN_NORTH) m |= W_B;
     } else {
         sx = in.lx; sy = in.ly;
+        if (in.remote && in.remote_ext && std::fabs(sx) < 0.05f && std::fabs(sy) < 0.05f) { sx = in.remote_nsx; sy = in.remote_nsy; }
+#ifdef G_NUNCHUK_LIGHTGUN
+        // light gun with a Nunchuk: WASD / left stick = Nunchuk stick, arrows / d-pad = d-pad (I/J/K/L move the pointer)
+        if (b & IN_UP) m |= W_UP;
+        if (b & IN_DOWN) m |= W_DOWN;
+        if (b & IN_LEFT) m |= W_LEFT;
+        if (b & IN_RIGHT) m |= W_RIGHT;
+        if (b & IN_SOUTH) m |= W_A;
+        if (b & (IN_EAST | IN_R2)) m |= W_B;      // B / RT / Space = the trigger
+        if (b & IN_WEST) m |= W_1;
+        if (b & IN_NORTH) m |= W_2;
+        if (b & IN_L1) m |= W_Z;                  // LB / Z key
+        if (b & IN_R1) m |= W_C;                  // RB / C key
+#else
         if (b & IN_KB_ARROWS) {     // keyboard arrows drive the stick
             if (b & IN_LEFT) sx = -1; if (b & IN_RIGHT) sx = 1;
             if (b & IN_UP) sy = 1; if (b & IN_DOWN) sy = -1;
@@ -134,6 +148,8 @@ static uint32_t remote_buttons(float& sx, float& sy) {
             if (b & IN_LEFT) m |= W_LEFT;
             if (b & IN_RIGHT) m |= W_RIGHT;
         }
+#endif
+#ifndef G_NUNCHUK_LIGHTGUN
         if (b & IN_ALT_UP) m |= W_UP;
         if (b & IN_ALT_DOWN) m |= W_DOWN;
         if (b & IN_ALT_LEFT) m |= W_LEFT;
@@ -144,6 +160,7 @@ static uint32_t remote_buttons(float& sx, float& sy) {
         if (b & IN_NORTH) m |= W_2;
         if (b & (IN_L1 | IN_L2)) m |= W_Z;
         if (b & (IN_R1 | IN_R2)) m |= W_C;
+#endif
     }
     if (b & IN_START) m |= W_PLUS;
     if (b & IN_BACK) m |= W_MINUS;
@@ -277,8 +294,9 @@ void hle_KPADRead(Ctx* c) {
     W8(buf + 0x5C, nunchuk_mode() ? 1 : 0);    // WPAD_DEV_CORE / WPAD_DEV_FREESTYLE
     if (nunchuk_mode()) {                      // ex_status.fs: stick @0x60, acc @0x68, acc_value @0x74
         WF32(buf + 0x60, nsx); WF32(buf + 0x64, nsy);
-        WF32(buf + 0x68, 0.f); WF32(buf + 0x6C, -1.f); WF32(buf + 0x70, 0.f);
-        WF32(buf + 0x74, 1.f);
+        const float* na = in.nacc;              // Nunchuk accelerometer (shaken with G / left stick click)
+        WF32(buf + 0x68, na[0]); WF32(buf + 0x6C, na[1]); WF32(buf + 0x70, na[2]);
+        WF32(buf + 0x74, std::sqrt(na[0] * na[0] + na[1] * na[1] + na[2] * na[2]));
     }
     W8(buf + 0x5D, 0);                         // WPAD_ERR_NONE
     W8(buf + 0x5E, valid ? 2 : 0);             // both IR points seen / none

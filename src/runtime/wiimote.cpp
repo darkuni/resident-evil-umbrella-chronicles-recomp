@@ -2,7 +2,10 @@
 // Mayflash DolphinBar in mode 4), read with SDL's HIDAPI. Buttons, accelerometer and the IR camera
 // (pointer, needs a powered sensor bar) feed the game's KPADRead. Protocol: wiibrew.org/wiki/Wiimote.
 //   Output reports: 0x11 LEDs, 0x12 report mode, 0x13/0x1A IR enable, 0x15 status, 0x16 write, 0x17 read.
-//   Input: 0x20 status, 0x21 read data, 0x22 ack, 0x33 buttons + accel + 12 bytes of IR.
+//   Input: 0x20 status, 0x21 read data, 0x22 ack, 0x33 buttons + accel + 12 bytes of IR,
+//          0x37 buttons + accel + 10 bytes of IR (basic) + 6 bytes of extension (with a Nunchuk plugged in).
+// A Nunchuk is switched on unencrypted (0x55 -> 0xA400F0, 0x00 -> 0xA400FB) when the status report says an
+// extension is attached; its stick, C/Z and accelerometer then come in report 0x37.
 // SDL's own Wii driver is switched off (SDL_HINT_JOYSTICK_HIDAPI_WII=0) so the remote is ours alone.
 #if defined(_WIN32) || defined(USE_SDL)
 #include <SDL2/SDL.h>
@@ -25,6 +28,7 @@ int g_state = 0;            // 0 nothing, 1 waiting for calibration, 2 running
 Uint64 g_state_t = 0;
 Uint64 g_last_report = 0;
 float g_last_px = 0.5f, g_last_py = 0.5f;
+bool g_ext = false;         // an extension is attached and initialised: report 0x37
 
 bool send(const uint8_t* d, int n) {
     uint8_t buf[22] = {0};             // the Microsoft stack wants full-length output reports
@@ -50,14 +54,28 @@ void set_mode() {
     const uint8_t sens2[2] = {0x63, 0x03};
     write_reg(0xB00000, sens1, 9);
     write_reg(0xB0001A, sens2, 2);
-    uint8_t mode = 0x03; write_reg(0xB00033, &mode, 1);     // extended IR (3 bytes per dot)
+    uint8_t mode = g_ext ? 0x01 : 0x03; write_reg(0xB00033, &mode, 1);   // basic IR (with the Nunchuk) / extended IR
     write_reg(0xB00030, &one, 1);
-    uint8_t rep[3] = {0x12, 0x04, 0x33};                     // continuous: buttons + accel + IR
+    uint8_t rep[3] = {0x12, 0x04, (uint8_t)(g_ext ? 0x37 : 0x33)};    // continuous: buttons + accel + IR (+ extension)
     send(rep, 3);
+}
+void request_status() { uint8_t st[2] = {0x15, 0x00}; send(st, 2); }
+void ext_changed(bool attached) {   // status report: an extension came or went
+    if (attached == g_ext) { uint8_t rep[3] = {0x12, 0x04, (uint8_t)(g_ext ? 0x37 : 0x33)}; send(rep, 3); return; }
+    if (attached) {
+        uint8_t a = 0x55, b = 0x00;
+        write_reg(0xA400F0, &a, 1);
+        write_reg(0xA400FB, &b, 1);
+    }
+    g_ext = attached;
+    g_host_input.remote_ext = attached;
+    g_host_input.remote_nsx = g_host_input.remote_nsy = 0;
+    fprintf(g_log, "[wiimote] extension %s\n", attached ? "attached (Nunchuk)" : "removed");
+    set_mode();
 }
 void close_dev(const char* why) {
     if (g_dev) { SDL_hid_close(g_dev); g_dev = nullptr; fprintf(g_log, "[wiimote] disconnected (%s)\n", why); }
-    g_state = 0;
+    g_state = 0; g_ext = false; g_host_input.remote_ext = false;
     g_host_input.remote = false; g_host_input.remote_ir = false; g_host_input.remote_buttons = 0;
 }
 void try_open() {
@@ -91,6 +109,36 @@ void parse_core(const uint8_t* r) {   // r[0], r[1]: buttons; r[2..4] accel (rep
     // gravity sense (resting = (0, -1, 0)).
     g_host_input.acc[0] = gx; g_host_input.acc[1] = -gz; g_host_input.acc[2] = -gy;
     g_host_input.roll = std::atan2(gx, gz);
+}
+void parse_ir(const uint8_t* ir);
+void parse_ir_basic(const uint8_t* ir) {   // 4 dots in 10 bytes (basic mode): two pairs of 5 bytes, no sizes
+    uint8_t ext[12];
+    for (int p = 0; p < 2; p++) {
+        const uint8_t* d = ir + 5 * p;
+        int x1 = d[0] | ((d[2] >> 4) & 3) << 8, y1 = d[1] | ((d[2] >> 6) & 3) << 8;
+        int x2 = d[3] | (d[2] & 3) << 8, y2 = d[4] | ((d[2] >> 2) & 3) << 8;
+        int xs[2] = {x1, x2}, ys[2] = {y1, y2};
+        for (int i = 0; i < 2; i++) {   // as extended-mode dots, all the same size
+            uint8_t* e = ext + 3 * (2 * p + i);
+            if (xs[i] >= 1023 && ys[i] >= 1023) { e[0] = e[1] = e[2] = 0xFF; continue; }
+            e[0] = xs[i] & 0xFF; e[1] = ys[i] & 0xFF; e[2] = (uint8_t)(((ys[i] >> 8) & 3) << 6 | ((xs[i] >> 8) & 3) << 4 | 8);
+        }
+    }
+    parse_ir(ext);
+}
+void parse_nunchuk(const uint8_t* e) {   // SX SY AX AY AZ (Z C, accel low bits); unencrypted
+    if (e[0] == 0xFF && e[1] == 0xFF && e[5] == 0xFF) return;   // not ready yet
+    auto st = [](int v) { float f = (v - 128) / 100.f; if (std::fabs(f) < 0.08f) f = 0; return std::max(-1.f, std::min(1.f, f)); };
+    g_host_input.remote_nsx = st(e[0]);
+    g_host_input.remote_nsy = st(e[1]);
+    int ax = (e[2] << 2) | ((e[5] >> 2) & 3), ay = (e[3] << 2) | ((e[5] >> 4) & 3), az = (e[4] << 2) | ((e[5] >> 6) & 3);
+    // zero ~512, 1 g ~ +200 (10-bit); mapped onto the KPAD axes the same way as the remote
+    float gx = (ax - 512) / 200.f, gy = (ay - 512) / 200.f, gz = (az - 512) / 200.f;
+    g_host_input.remote_nacc[0] = gx; g_host_input.remote_nacc[1] = -gz; g_host_input.remote_nacc[2] = -gy;   // same axes as the remote (parse_core)
+    uint32_t cz = 0;
+    if (!(e[5] & 1)) cz |= 0x2000;   // Z
+    if (!(e[5] & 2)) cz |= 0x4000;   // C
+    g_host_input.remote_buttons = (g_host_input.remote_buttons & 0x9F1F) | cz;
 }
 void parse_ir(const uint8_t* ir) {    // 4 dots x 3 bytes (extended mode)
     float xs[4], ys[4]; int sz[4], n = 0;
@@ -162,14 +210,18 @@ void wiimote_poll() {
                 set_mode();
                 g_state = 2;
                 g_host_input.remote = true;
+                request_status();   // is a Nunchuk plugged in?
             }
             break;
         case 0x20:   // status (e.g. extension plugged/unplugged): the report mode must be set again
-            if (g_state == 2) { uint8_t rep[3] = {0x12, 0x04, 0x33}; send(rep, 3); }
             if (n >= 3) g_host_input.remote_buttons = ((uint32_t)r[1] | ((uint32_t)r[2] << 8)) & 0x9F1F;
+            if (g_state == 2 && n >= 4) ext_changed((r[3] & 0x02) != 0);
             break;
         case 0x33:
             if (n >= 18) { parse_core(r + 1); parse_ir(r + 6); }
+            break;
+        case 0x37:   // buttons, accel, 10 bytes basic IR, 6 bytes extension
+            if (n >= 22) { parse_core(r + 1); parse_ir_basic(r + 6); if (g_ext) parse_nunchuk(r + 16); }
             break;
         case 0x30: case 0x31:
             if (n >= 3) { g_host_input.remote_buttons = ((uint32_t)r[1] | ((uint32_t)r[2] << 8)) & 0x9F1F; }
@@ -180,6 +232,7 @@ void wiimote_poll() {
     if (g_state == 1 && now - g_state_t > 1500) {   // no calibration reply: carry on with defaults
         fprintf(g_log, "[wiimote] no calibration reply, using defaults\n");
         set_mode(); g_state = 2; g_host_input.remote = true;
+        request_status();
     }
     if (g_state == 2 && now - g_last_report > 3000) close_dev("no reports for 3 s");
 }

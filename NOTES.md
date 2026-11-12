@@ -32,6 +32,14 @@ in Shadow (copied from the House of the Dead: Overkill repo).
 - Reload is a shake of the remote ("Shake the Wii Remote to reload the gun"): G_RELOAD_SHAKE makes middle mouse
   and V shake it too (Shift and LB / LT already do).
 
+- Controls the game uses (dialog.arc tutorial.csv + mes_us.txtres; button icons are the Shift-JIS glyphs
+  Alpha = A, Beta = B, "wii" = remote motion, Gamma = a third button): B fire, A pick up / items / "Move", A held +
+  B = grenade, A held + shake = knife, shake = reload and counterattack, d-pad (or Gamma) = switch weapons,
+  Nunchuk stick = camera. Wii Zapper control types need the Nunchuk, so G_NUNCHUK keeps it attached;
+  G_NUNCHUK_LIGHTGUN lays the PC controls out without overlaps (dist/README.txt). G or the left stick click shakes
+  the Nunchuk (KPAD ex_status acc). wiimote.cpp now switches a real Nunchuk on (unencrypted) and reads report 0x37
+  (basic IR + extension): stick, C/Z, accelerometer.
+
 ## Status
 - Boots through the strap and Zapper screens, the CRIWARE logo, the intro movie (Sofdec), the title, save
   creation (NAND, BIO_UC0.DAT), load / new game, difficulty, scenario, chapter ("Train Derailment 1"),

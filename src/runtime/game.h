@@ -27,3 +27,5 @@
 #define G_DISC_BYTES_PER_SEC    8000000u      // async disc reads complete after len / 8 MB/s (hle_ios.cpp)
 #define G_POINTER_GAIN_X        0.8f          // the game maps KPAD pos x * 1.25 to the picture (measured)
 #define G_POINTER_GAIN_Y        0.6f          // and y * 1.25 * (16:9 / 4:3): 1/0.6
+#define G_NUNCHUK               1             // the Nunchuk is always attached (camera stick; the Zapper types need it)
+#define G_NUNCHUK_LIGHTGUN      1             // controls layout: see dist/README.txt
