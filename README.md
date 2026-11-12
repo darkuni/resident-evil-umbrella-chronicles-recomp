@@ -8,7 +8,9 @@ with a small runtime that replaces the Wii hardware, IOS and the DSP.
 
 ## Status
 
-In progress: boots through the logos, intro movie, title, saves and menus to equipment select. Not released yet.
+Playable: boots through the logos, intro movie, title, saves and menus into the scenarios; chapter 1 (Train
+Derailment) plays with the light-gun controls (pointer, Nunchuk camera, shake to reload / knife / counterattack).
+Optional 60 fps gameplay (the original runs at 30). Not every chapter has been played through yet.
 
 ## Download
 
