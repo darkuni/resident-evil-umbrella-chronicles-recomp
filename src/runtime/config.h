@@ -22,6 +22,7 @@ struct Config {
     float ir_span = 0.55f;             // real remote: share of the IR camera's view that covers the screen
     float motion_sensitivity = 1.0f;   // simulated motions: how far the mouse turns the remote
     bool capture_mouse = false;        // keep the mouse cursor inside the window while the game has focus
+    bool render_thread = true;         // parse GX and draw on a thread of its own (gx_fifo.cpp)
 #ifdef G_FPS60
     bool fps60 = false;                // run the game's frame limiter at 60 fps instead of its own 30 (game_uc.cpp)
 #endif

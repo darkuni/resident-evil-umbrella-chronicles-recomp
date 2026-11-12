@@ -185,7 +185,80 @@ static uint32_t g_rptr = 0;          // physical address of the next burst the G
 static bool g_bp_latched = false;    // interrupt raised for the current stall
 static uint32_t pi_reg(uint32_t a) { return mmio_peek(a); }
 
+// ---------------------------------------------------------------- render thread
+// On the console the graphics processor reads the FIFO in parallel with the CPU; games wait for it only
+// through draw-done / tokens / breakpoints. Here the FIFO front-end (pointers, breakpoints, watermarks)
+// stays on the guest thread, and the bytes the GP consumes go through a single-producer / single-consumer
+// ring to a render thread that parses them, transforms vertices and talks to GL. Draw-done and token
+// interrupts are posted when the render thread reaches them, like the real GP. render_thread = 0 in the
+// ini (or GX_SYNC=1) parses on the guest thread as before.
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <immintrin.h>
+#include "config.h"
+static void gp_parse_now(const uint8_t* p, size_t n);
+static const size_t RQ_SIZE = 64u << 20;
+static uint8_t* g_rq = nullptr;
+static std::atomic<uint64_t> g_rq_w{0}, g_rq_r{0};      // bytes written / consumed (monotonic)
+static std::atomic<bool> g_rq_sleeping{false}, g_rq_full_wait{false};
+static std::mutex g_rq_mx;
+static std::condition_variable g_rq_cv, g_rq_space_cv;
+static int g_rt_mode = -1;                               // -1 undecided, 0 sync, 1 render thread
+static void render_thread_main() {
+    for (;;) {
+        uint64_t r = g_rq_r.load(std::memory_order_relaxed);
+        uint64_t w = g_rq_w.load(std::memory_order_acquire);
+        if (r == w) {
+            for (int i = 0; i < 4000 && r == w; i++) { _mm_pause(); w = g_rq_w.load(std::memory_order_acquire); }
+            if (r == w) {
+                std::unique_lock<std::mutex> lk(g_rq_mx);
+                g_rq_sleeping.store(true);
+                w = g_rq_w.load(std::memory_order_acquire);
+                if (r == w) g_rq_cv.wait_for(lk, std::chrono::milliseconds(2));
+                g_rq_sleeping.store(false);
+                continue;
+            }
+        }
+        // one contiguous piece of the ring at a time
+        size_t off = (size_t)(r % RQ_SIZE), n = (size_t)std::min<uint64_t>(w - r, RQ_SIZE - off);
+        gp_parse_now(g_rq + off, n);
+        g_rq_r.store(r + n, std::memory_order_release);
+        if (g_rq_full_wait.load()) { std::lock_guard<std::mutex> lk(g_rq_mx); g_rq_space_cv.notify_all(); }
+    }
+}
 static void gp_parse(const uint8_t* p, size_t n) {
+    if (g_rt_mode < 0) {
+        g_rt_mode = (g_cfg.render_thread && !getenv("GX_SYNC")) ? 1 : 0;
+        if (g_rt_mode) {
+            g_rq = (uint8_t*)malloc(RQ_SIZE);
+            std::thread(render_thread_main).detach();
+        }
+        fprintf(g_log, "[gx] %s\n", g_rt_mode ? "render thread on" : "rendering on the emulation thread");
+    }
+    if (!g_rt_mode) { gp_parse_now(p, n); return; }
+    uint64_t w = g_rq_w.load(std::memory_order_relaxed);
+    if (w + n - g_rq_r.load(std::memory_order_acquire) > RQ_SIZE) {   // ring full: wait for the renderer
+        std::unique_lock<std::mutex> lk(g_rq_mx);
+        g_rq_full_wait.store(true);
+        g_rq_space_cv.wait(lk, [&] { return w + n - g_rq_r.load(std::memory_order_acquire) <= RQ_SIZE; });
+        g_rq_full_wait.store(false);
+    }
+    size_t off = (size_t)(w % RQ_SIZE), first = std::min(n, RQ_SIZE - off);
+    memcpy(g_rq + off, p, first);
+    if (first < n) memcpy(g_rq, p + first, n - first);
+    g_rq_w.store(w + n, std::memory_order_release);
+    if (g_rq_sleeping.load()) { std::lock_guard<std::mutex> lk(g_rq_mx); g_rq_cv.notify_one(); }
+}
+// The render thread has parsed everything queued so far (call from the guest side only).
+void gx_render_sync() {
+    if (g_rt_mode != 1) return;
+    uint64_t w = g_rq_w.load(std::memory_order_relaxed);
+    while (g_rq_r.load(std::memory_order_acquire) < w) std::this_thread::yield();
+}
+
+static void gp_parse_now(const uint8_t* p, size_t n) {
     g_fifo.insert(g_fifo.end(), p, p + n);
     for (;;) {
         long k = parse_cmd(g_fifo.data() + g_rd, g_fifo.size() - g_rd, false);

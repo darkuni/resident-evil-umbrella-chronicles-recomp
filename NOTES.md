@@ -66,6 +66,14 @@ in Shadow (copied from the House of the Dead: Overkill repo).
 - Closing the window / Quit: std::_Exit after flushing the log (exit() with the game's threads running made
   the C runtime abort: "signal 22").
 
+- Render thread (gx_fifo.cpp): after the draw-path work Shane's log showed 60 fps up to ~75k vertices per
+  frame and 30 fps at 100-145k (frame ~18 ms). The FIFO front-end (PI/CP pointers, breakpoints, watermarks)
+  stays on the guest thread; the bytes the GP consumes go through a 64 MB SPSC ring to a render thread that
+  parses, transforms and draws, and posts draw-done / token interrupts when it reaches them, as the real GP
+  does. The renderer's GL context lives on that thread (the per-guest-thread context hand-off never
+  triggers). render_thread = 0 in the ini or GX_SYNC=1 parses on the guest thread as before. In the container
+  the scripted run reaches chapter select in 160 s instead of ~10 minutes.
+
 ## Status
 - Boots through the strap and Zapper screens, the CRIWARE logo, the intro movie (Sofdec), the title, save
   creation (NAND, BIO_UC0.DAT), load / new game, difficulty, scenario, chapter ("Train Derailment 1"),
